@@ -1,0 +1,764 @@
+"""Build and publish the native addon. Requires Python 3.11+, stdlib only."""
+
+import argparse
+import filecmp
+import json
+import os
+from pathlib import Path
+import plistlib
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+import tomllib
+import zipfile
+
+if __package__:
+    from .release_targets import release_target
+else:
+    from release_targets import release_target
+
+
+ROOT = Path(__file__).resolve().parent.parent
+ADDON_NAME = "[[[ addon_name ]]]"
+WEB_TOOLCHAIN = "nightly-2026-01-22"
+IOS_TARGETS = ("aarch64-apple-ios", "aarch64-apple-ios-sim", "x86_64-apple-ios")
+
+
+def rust_manifest():
+    with (ROOT / "rust/Cargo.toml").open("rb") as manifest:
+        return tomllib.load(manifest)
+
+
+def library_stem():
+    configuration = rust_manifest()
+
+    return (
+        configuration.get("lib", {})
+        .get("name", configuration["package"]["name"].replace("-", "_"))
+    )
+
+
+def native_host():
+    version = subprocess.check_output(
+        ["rustc", "-vV"],
+        cwd=ROOT,
+        text=True,
+        encoding="utf-8",
+    )
+
+    for line in version.splitlines():
+        if line.startswith("host: "):
+            return line.removeprefix("host: ")
+
+    raise ValueError("rustc did not report a native host")
+
+
+def library_name(host, stem=None):
+    stem = library_stem() if stem is None else stem
+
+    return release_target(host).filename(stem)
+
+
+def publish(source, destination):
+    """Replace the installed file atomically; never overwrite a loaded library."""
+    source, destination = Path(source), Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+
+    try:
+        with source.open("rb") as incoming:
+            with tempfile.NamedTemporaryFile(
+                dir=destination.parent,
+                prefix=".gdextension-stage-",
+                delete=False,
+            ) as staged:
+                temporary = Path(staged.name)
+                shutil.copyfileobj(incoming, staged)
+
+            temporary.chmod(stat.S_IMODE(os.fstat(incoming.fileno()).st_mode))
+
+        modified = int(time.time())
+
+        if destination.exists():
+            modified = max(modified, int(destination.stat().st_mtime) + 1)
+
+        os.utime(temporary, (modified, modified))
+        os.replace(temporary, destination)
+    except OSError as error:
+        raise OSError(
+            f"Cannot publish {source} to {destination}: {error}. "
+            "The installed file was not overwritten in place. Close Godot if it "
+            "locks a loaded Windows DLL, then retry."
+        ) from error
+    finally:
+        if temporary is not None and temporary.exists():
+            temporary.chmod(stat.S_IREAD | stat.S_IWRITE)
+            temporary.unlink()
+
+
+def publish_bundle(source, destination):
+    """Stage a complete bundle before replacing it, restoring the old one on failure."""
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    work = Path(
+        tempfile.mkdtemp(dir=destination.parent, prefix=".gdextension-stage-")
+    )
+    previous = work / "previous"
+
+    try:
+        staged = work / "bundle"
+        shutil.copytree(source, staged)
+
+        if destination.exists():
+            os.replace(destination, previous)
+
+        try:
+            os.replace(staged, destination)
+        except BaseException:
+            if previous.exists():
+                os.replace(previous, destination)
+
+            raise
+    finally:
+        # Retain the backup if even restoring it failed.
+        if not previous.exists() or destination.exists():
+            shutil.rmtree(work)
+
+
+def addon_files():
+    addon = ROOT / "addon"
+
+    if not addon.is_dir():
+        raise ValueError(f"Addon source directory is missing: {addon}")
+
+    return sorted(
+        path
+        for path in addon.rglob("*")
+        if path.is_file()
+        and not any(
+            part.startswith(".gdextension-stage-") for part in path.parts
+        )
+    )
+
+
+def sync_addon():
+    """Publish changed addon files into the sandbox without deleting live binaries."""
+    addon = ROOT / "addon"
+    destination = ROOT / "godot/addons" / ADDON_NAME
+
+    if destination.is_symlink():
+        raise ValueError(
+            f"Expected a generated directory, found a symlink: {destination}"
+        )
+
+    filecmp.clear_cache()
+
+    for source in addon_files():
+        installed = destination / source.relative_to(addon)
+
+        if installed.is_file() and filecmp.cmp(
+            source,
+            installed,
+            shallow=False,
+        ):
+            continue
+
+        publish(source, installed)
+
+    # Register the descriptor before editor startup, rather than during its
+    # first filesystem scan. Preserve any other extensions in the sandbox.
+    extension_list = ROOT / "godot/.godot/extension_list.cfg"
+    extension_list.parent.mkdir(parents=True, exist_ok=True)
+    entries = (
+        extension_list.read_text(encoding="utf-8").splitlines()
+        if extension_list.exists()
+        else []
+    )
+    descriptor = f"res://addons/{ADDON_NAME}/{ADDON_NAME}.gdextension"
+
+    if descriptor not in entries:
+        extension_list.write_text(
+            "\n".join([*entries, descriptor]) + "\n",
+            encoding="utf-8",
+        )
+
+
+def cargo_build(
+    kind,
+    release,
+    target,
+    filename,
+    features=(),
+    toolchain=None,
+    env=None,
+    rustflags=(),
+):
+    """Select the extension's exact Cargo artifact, including cross builds."""
+
+    if kind not in ("runtime", "editor"):
+        raise ValueError(f"Unknown build kind {kind!r}")
+
+    stem = library_stem()
+    manifest = ROOT / "rust/Cargo.toml"
+    features = ["editor", *features] if kind == "editor" else list(features)
+    command = ["cargo"]
+
+    if toolchain:
+        command.append(f"+{toolchain}")
+
+    command.extend(
+        [
+            "build",
+            "--locked",
+            "--manifest-path",
+            str(manifest),
+            "--no-default-features",
+            "--target-dir",
+            str(ROOT / "rust/target" / kind),
+            "--target",
+            target,
+            "--message-format=json-render-diagnostics",
+        ]
+    )
+
+    if toolchain:
+        command.append("-Zbuild-std")
+
+    if rustflags:
+        command.extend(
+            [
+                "--config",
+                f"target.{target}.rustflags={json.dumps(list(rustflags))}",
+            ]
+        )
+        # Global flags override target rustflags in Cargo. Preserve custom flags
+        # while keeping the platform's required linker flags last.
+        effective_env = dict(os.environ if env is None else env)
+
+        if (
+            "CARGO_ENCODED_RUSTFLAGS" in effective_env
+            or "RUSTFLAGS" in effective_env
+        ):
+            if "CARGO_ENCODED_RUSTFLAGS" in effective_env:
+                encoded = effective_env["CARGO_ENCODED_RUSTFLAGS"]
+                inherited = encoded.split("\x1f") if encoded else []
+            else:
+                inherited = effective_env["RUSTFLAGS"].split()
+
+            effective_env["CARGO_ENCODED_RUSTFLAGS"] = "\x1f".join(
+                [*inherited, *rustflags]
+            )
+            effective_env.pop("RUSTFLAGS", None)
+            env = effective_env
+
+    if features:
+        command.extend(["--features", ",".join(features)])
+
+    if kind == "runtime" or release:
+        command.append("--release")
+
+    if kind == "editor" and release:
+        # gdext uses dependency debug assertions to support Linux hot reload.
+        command.extend(["--config", "profile.release.debug-assertions=true"])
+
+    options = {"env": env} if env is not None else {}
+    result = subprocess.run(
+        command,
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        check=True,
+        **options,
+    )
+    artifacts = []
+
+    for line in result.stdout.splitlines():
+        message = json.loads(line)
+
+        if message.get("reason") != "compiler-artifact":
+            continue
+
+        target = message.get("target", {})
+
+        if (
+            Path(message.get("manifest_path", "")).resolve()
+            == manifest.resolve()
+            and target.get("name") == stem
+            and "cdylib" in target.get("crate_types", [])
+            and set(message.get("features", [])) == set(features)
+        ):
+            artifacts.extend(
+                Path(path)
+                for path in message.get("filenames", [])
+                if Path(path).name == filename
+            )
+
+    if len(artifacts) != 1:
+        raise ValueError(
+            f"Expected one native {filename} from Cargo, got {artifacts}"
+        )
+
+    return artifacts[0]
+
+
+def android_environment(target):
+    ndk = os.environ.get("ANDROID_NDK_HOME") or os.environ.get(
+        "ANDROID_NDK_ROOT"
+    )
+
+    if not ndk:
+        raise ValueError(
+            "Android builds require ANDROID_NDK_HOME pointing to the installed NDK"
+        )
+
+    host = {
+        "linux": "linux-x86_64",
+        "darwin": "darwin-x86_64",
+        "win32": "windows-x86_64",
+    }.get(sys.platform)
+
+    if host is None:
+        raise ValueError(f"Unsupported Android build host: {sys.platform}")
+
+    clang_target = (
+        "armv7a-linux-androideabi"
+        if target == "armv7-linux-androideabi"
+        else target
+    )
+    suffix = ".cmd" if sys.platform == "win32" else ""
+    linker = (
+        Path(ndk)
+        / "toolchains/llvm/prebuilt"
+        / host
+        / "bin"
+        / f"{clang_target}24-clang{suffix}"
+    )
+
+    if not linker.is_file():
+        raise ValueError(f"Android NDK linker is missing: {linker}")
+
+    return {
+        **os.environ,
+        f"CARGO_TARGET_{target.upper().replace('-', '_')}_LINKER": str(linker),
+    }
+
+
+def build_ios():
+    """Bundle device and universal simulator dylibs as a dynamic XCFramework."""
+
+    if sys.platform != "darwin":
+        raise ValueError("iOS builds require macOS with Xcode and the iOS SDKs")
+
+    stem = library_stem()
+    env = {**os.environ, "IPHONEOS_DEPLOYMENT_TARGET": "16.0"}
+    flags = ("-C", f"link-arg=-Wl,-install_name,@rpath/{stem}.framework/{stem}")
+    artifacts = [
+        cargo_build(
+            "runtime",
+            True,
+            target,
+            f"lib{stem}.dylib",
+            env=env,
+            rustflags=flags,
+        )
+        for target in IOS_TARGETS
+    ]
+    temporary_root = Path(tempfile.gettempdir()) / "codex"
+    temporary_root.mkdir(parents=True, exist_ok=True)
+    destination = ROOT / "addon/bin/runtime/release" / f"{stem}.xcframework"
+
+    with tempfile.TemporaryDirectory(dir=temporary_root) as work:
+        work = Path(work)
+        frameworks = []
+        version = (
+            rust_manifest()["package"]["version"]
+            .split("-", 1)[0]
+            .split("+", 1)[0]
+        )
+
+        for platform, libraries in (
+            ("iPhoneOS", artifacts[:1]),
+            ("iPhoneSimulator", artifacts[1:]),
+        ):
+            framework = work / platform / f"{stem}.framework"
+            framework.mkdir(parents=True)
+            binary = framework / stem
+
+            if len(libraries) == 1:
+                shutil.copy2(libraries[0], binary)
+            else:
+                subprocess.run(
+                    [
+                        "lipo",
+                        "-create",
+                        *map(str, libraries),
+                        "-output",
+                        str(binary),
+                    ],
+                    check=True,
+                )
+
+            architectures = subprocess.check_output(
+                ["lipo", "-archs", str(binary)],
+                text=True,
+            ).split()
+            expected = {"arm64"} if len(libraries) == 1 else {"arm64", "x86_64"}
+
+            if set(architectures) != expected:
+                raise ValueError(
+                    f"Unexpected iOS framework architectures: {architectures}"
+                )
+
+            names = subprocess.check_output(
+                ["otool", "-arch", "all", "-D", str(binary)],
+                text=True,
+            )
+            names = [
+                line.strip()
+                for line in names.splitlines()
+                if line.strip() and not line.endswith(":")
+            ]
+
+            if names != [f"@rpath/{stem}.framework/{stem}"] * len(libraries):
+                raise ValueError(
+                    f"Unexpected iOS framework install names: {names}"
+                )
+
+            with (framework / "Info.plist").open("wb") as plist:
+                plistlib.dump(
+                    {
+                        "CFBundleExecutable": stem,
+                        "CFBundleIdentifier": (
+                            "[[[ ios_bundle_identifier_prefix ]]]."
+                            f"{stem.replace('_', '-')}"
+                        ),
+                        "CFBundleName": stem,
+                        "CFBundlePackageType": "FMWK",
+                        "CFBundleInfoDictionaryVersion": "6.0",
+                        "CFBundleShortVersionString": version,
+                        "CFBundleVersion": version,
+                        "CFBundleSupportedPlatforms": [platform],
+                        "MinimumOSVersion": "16.0",
+                    },
+                    plist,
+                )
+
+            frameworks.append(framework)
+
+        bundle = work / f"{stem}.xcframework"
+        subprocess.run(
+            [
+                "xcodebuild",
+                "-create-xcframework",
+                "-framework",
+                str(frameworks[0]),
+                "-framework",
+                str(frameworks[1]),
+                "-output",
+                str(bundle),
+            ],
+            check=True,
+        )
+        publish_bundle(bundle, destination)
+
+    sync_addon()
+
+
+def build(kind, release=False, target=None):
+    target = target or native_host()
+    spec = release_target(target)
+
+    if kind not in ("runtime", "editor"):
+        raise ValueError(f"Unknown build kind {kind!r}")
+
+    if kind == "editor" and not spec.editor:
+        raise ValueError(f"{target} supports runtime exports only")
+
+    if target == "ios-universal":
+        build_ios()
+
+        return
+
+    filename = library_name(target)
+    cargo_filename = filename
+    features, flags, toolchain, env = (), (), None, None
+    cargo_target = target
+
+    if spec.platform.startswith("web."):
+        cargo_target = "wasm32-unknown-emscripten"
+        cargo_filename = f"{library_stem()}.wasm"
+        threads = ".threads." in spec.platform
+        features = ("web",) if threads else ("web", "web-nothreads")
+        flags = (
+            "-C",
+            "link-args=-sSIDE_MODULE=2",
+            "-C",
+            "llvm-args=-enable-emscripten-cxx-exceptions=0",
+            "-Z",
+            "default-visibility=hidden",
+            "-Z",
+            "link-native-libraries=no",
+            "-Z",
+            "emscripten-wasm-eh=false",
+        )
+
+        if threads:
+            flags += (
+                "-C",
+                "link-args=-pthread",
+                "-C",
+                "target-feature=+atomics",
+            )
+
+        toolchain = WEB_TOOLCHAIN
+    elif spec.platform.startswith("android."):
+        env = android_environment(target)
+        flags = ("-C", "link-arg=-Wl,-z,max-page-size=16384")
+
+    artifact = cargo_build(
+        kind,
+        release,
+        cargo_target,
+        cargo_filename,
+        features=features,
+        toolchain=toolchain,
+        env=env,
+        rustflags=flags,
+    )
+    destination = ROOT / "addon/bin" / kind
+
+    if kind == "runtime":
+        destination /= "release"
+
+    publish(artifact, destination / filename)
+    sync_addon()
+
+
+def packaged_descriptor(source):
+    """Disable reloads in the archive while preserving the development descriptor."""
+    content = source.read_bytes().decode("utf-8")
+    section = ""
+    configuration_seen = False
+    replacement = None
+    lines = content.splitlines(keepends=True)
+
+    for index, line in enumerate(lines):
+        text = line.partition(";")[0].strip()
+
+        if text.startswith("["):
+            if not text.endswith("]") or "[" in text[1:] or "]" in text[:-1]:
+                raise ValueError(
+                    f"Invalid section in GDExtension descriptor {source}"
+                )
+
+            section = text[1:-1]
+
+            if section == "configuration":
+                if configuration_seen:
+                    raise ValueError(
+                        f"Duplicate configuration section in GDExtension descriptor {source}"
+                    )
+
+                configuration_seen = True
+
+            continue
+
+        key, separator, value = line.partition("=")
+
+        if section == "configuration" and key.strip() == "reloadable":
+            if replacement is not None:
+                raise ValueError(
+                    f"Duplicate reloadable entry in GDExtension descriptor {source}"
+                )
+
+            boolean, marker, comment = value.partition(";")
+
+            if not separator or boolean.strip() not in ("true", "false"):
+                raise ValueError(
+                    f"Invalid reloadable value in {source}: expected true or false"
+                )
+
+            leading = boolean[: len(boolean) - len(boolean.lstrip())]
+            trailing = boolean[len(boolean.rstrip()) :]
+            replacement = (
+                index,
+                f"{key}={leading}false{trailing}{marker}{comment}",
+            )
+
+    if replacement is None:
+        raise ValueError(
+            f"Missing reloadable entry in GDExtension descriptor {source}"
+        )
+
+    index, value = replacement
+    lines[index] = value
+
+    return "".join(lines).encode("utf-8")
+
+
+def package(target=None):
+    """Package one target's addon, including export-only libraries and bundles."""
+    host = target or native_host()
+    spec = release_target(host)
+    addon = ROOT / "addon"
+    roots = {
+        addon / relative
+        for relative in spec.library_entries(library_stem()).values()
+    }
+    descriptor = addon / f"{ADDON_NAME}.gdextension"
+    required = [descriptor]
+    required.extend(sorted(roots))
+    missing = [
+        path.relative_to(ROOT).as_posix()
+        for path in required
+        if not path.exists()
+    ]
+
+    if missing:
+        raise ValueError(
+            f"Run `just build` before packaging; missing: {', '.join(missing)}"
+        )
+
+    binaries = set()
+
+    for path in roots:
+        if path.is_dir() and path.suffix == ".xcframework":
+            if __package__:
+                from .package_release import xcframework_files
+            else:
+                from package_release import xcframework_files
+
+            sources = {source for source in path.rglob("*") if source.is_file()}
+            xcframework_files(
+                {source.as_posix(): source.read_bytes() for source in sources},
+                path.as_posix(),
+                library_stem(),
+                path,
+            )
+            binaries.update(sources)
+        elif path.is_file():
+            binaries.add(path)
+        else:
+            raise ValueError(f"Expected a library file or XCFramework: {path}")
+
+    descriptor_content = packaged_descriptor(descriptor)
+    distribution = ROOT / "dist"
+    distribution.mkdir(parents=True, exist_ok=True)
+    version = rust_manifest()["package"]["version"]
+    destination = distribution / f"{ADDON_NAME}-{version}-{host}.zip"
+    temporary = None
+
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=distribution,
+            prefix=".gdextension-stage-",
+            delete=False,
+        ) as staged:
+            temporary = Path(staged.name)
+
+        with zipfile.ZipFile(
+            temporary,
+            "w",
+            compression=zipfile.ZIP_DEFLATED,
+        ) as archive:
+            for source in addon_files():
+                if (
+                    source.relative_to(addon).parts[0] == "bin"
+                    and source not in binaries
+                ):
+                    continue
+
+                installed = (
+                    Path("addons") / ADDON_NAME / source.relative_to(addon)
+                )
+
+                if source == descriptor:
+                    archive.writestr(installed.as_posix(), descriptor_content)
+                else:
+                    archive.write(source, installed)
+
+        os.replace(temporary, destination)
+    finally:
+        if temporary is not None and temporary.exists():
+            temporary.unlink()
+
+    print(destination)
+
+    return destination
+
+
+def open_editor(godot=None):
+    executable = godot or os.environ.get("GODOT", "godot")
+    command = [executable, "--editor", "--path", str(ROOT / "godot")]
+    subprocess.run(
+        command,
+        cwd=ROOT,
+        check=True,
+    )
+
+
+def run_demo(godot=None):
+    executable = godot or os.environ.get("GODOT", "godot")
+    subprocess.run(
+        [executable, "--path", str(ROOT / "godot")],
+        cwd=ROOT,
+        check=True,
+    )
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest="command", required=True)
+    build_parser = commands.add_parser("build")
+    build_parser.add_argument("kind", choices=("runtime", "editor"))
+    build_parser.add_argument("--release", action="store_true")
+    build_parser.add_argument(
+        "--target",
+        help="Rust target or release bundle ID; defaults to the native host",
+    )
+    commands.add_parser("sync-addon")
+    package_parser = commands.add_parser("package")
+    package_parser.add_argument(
+        "--target",
+        help="Release target ID; defaults to the native host",
+    )
+    open_parser = commands.add_parser("open")
+    open_parser.add_argument("--godot")
+    run_parser = commands.add_parser("run")
+    run_parser.add_argument("--godot")
+    args = parser.parse_args()
+
+    try:
+        if args.command == "build":
+            build(
+                args.kind,
+                release=args.release,
+                target=args.target,
+            )
+        elif args.command == "sync-addon":
+            sync_addon()
+        elif args.command == "package":
+            package(args.target)
+        elif args.command == "run":
+            run_demo(args.godot)
+        else:
+            open_editor(args.godot)
+    except (
+        OSError,
+        ValueError,
+        KeyError,
+        subprocess.CalledProcessError,
+    ) as error:
+        print(f"error: {error}", file=sys.stderr)
+
+        return 1
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

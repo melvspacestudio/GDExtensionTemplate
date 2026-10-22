@@ -1,0 +1,348 @@
+"""Combine all export-target archives into one installable addon. Stdlib only."""
+
+import argparse
+import configparser
+import io
+import os
+from pathlib import Path, PurePosixPath
+import plistlib
+import re
+import sys
+import tempfile
+from xml.parsers.expat import ExpatError
+import zipfile
+
+if __package__:
+    from .release_targets import RELEASE_TARGETS
+else:
+    from release_targets import RELEASE_TARGETS
+
+
+ADDON_PATH = "addons/[[[ addon_name ]]]"
+DESCRIPTOR_PATH = f"{ADDON_PATH}/[[[ addon_name ]]].gdextension"
+
+
+def read_package(path):
+    files, metadata = {}, {}
+
+    with zipfile.ZipFile(path) as archive:
+        for entry in archive.infolist():
+            name = entry.filename
+            parts = PurePosixPath(name)
+
+            if (
+                entry.is_dir()
+                or not name.startswith(f"{ADDON_PATH}/")
+                or ".." in parts.parts
+                or "\\" in name
+                or name != parts.as_posix()
+            ):
+                raise ValueError(
+                    f"Invalid addon archive path in {path}: {name}"
+                )
+
+            if name in files:
+                raise ValueError(f"Duplicate archive entry in {path}: {name}")
+
+            files[name] = archive.read(entry)
+            metadata[name] = entry
+
+    if DESCRIPTOR_PATH not in files:
+        raise ValueError(f"Missing GDExtension descriptor in {path}")
+
+    descriptor = configparser.ConfigParser(
+        interpolation=None,
+        inline_comment_prefixes=(";",),
+    )
+    descriptor.optionxform = str
+    descriptor.read_string(
+        "\n".join(
+            line.lstrip()
+            for line in files[DESCRIPTOR_PATH].decode("utf-8").splitlines()
+        )
+    )
+
+    return files, metadata, descriptor
+
+
+def descriptor_stem(descriptor, target, package):
+    """Read the configured crate name without requiring Cargo or a Rust host."""
+    key, relative = next(iter(target.library_entries("{stem}").items()))
+    value = descriptor.get(
+        "libraries",
+        key,
+        fallback="",
+    )
+    pattern = (
+        re.escape(f'"res://{ADDON_PATH}/{relative}"')
+        .replace(re.escape("{stem}"), r"(?P<stem>[A-Za-z_][A-Za-z0-9_]*)")
+    )
+    match = re.fullmatch(pattern, value)
+
+    if match is None:
+        raise ValueError(
+            f"Invalid or missing descriptor library entry in {package.name}: {key}"
+        )
+
+    return match.group("stem")
+
+
+def bundle_plist(files, path, package):
+    if path not in files:
+        raise ValueError(
+            f"Missing XCFramework metadata in {package.name}: {path}"
+        )
+
+    try:
+        metadata = plistlib.loads(files[path])
+    except (ValueError, TypeError, ExpatError) as error:
+        raise ValueError(
+            f"Invalid XCFramework metadata in {package.name}: {path}"
+        ) from error
+
+    if not isinstance(metadata, dict):
+        raise ValueError(
+            f"Invalid XCFramework metadata in {package.name}: {path}"
+        )
+
+    return metadata
+
+
+def xcframework_files(files, source, stem, package):
+    """Validate device/simulator frameworks and keep their complete bundle trees."""
+    metadata = bundle_plist(
+        files,
+        f"{source}/Info.plist",
+        package,
+    )
+    libraries = metadata.get("AvailableLibraries")
+
+    if not isinstance(libraries, list) or len(libraries) != 2:
+        raise ValueError(
+            f"Expected device and simulator XCFramework slices in {package.name}"
+        )
+
+    expected = {
+        ("", frozenset(("arm64",))),
+        ("simulator", frozenset(("arm64", "x86_64"))),
+    }
+    slices, identifiers = set(), set()
+
+    for library in libraries:
+        if not isinstance(library, dict):
+            raise ValueError(f"Invalid XCFramework slice in {package.name}")
+
+        identifier = library.get("LibraryIdentifier")
+        architectures = library.get("SupportedArchitectures")
+        variant = library.get("SupportedPlatformVariant", "")
+
+        if (
+            not isinstance(identifier, str)
+            or not identifier
+            or identifier in (".", "..")
+            or "/" in identifier
+            or "\\" in identifier
+            or identifier in identifiers
+            or not isinstance(architectures, list)
+            or any(not isinstance(value, str) for value in architectures)
+            or len(set(architectures)) != len(architectures)
+            or not isinstance(variant, str)
+            or library.get("SupportedPlatform") != "ios"
+            or library.get("LibraryPath") != f"{stem}.framework"
+        ):
+            raise ValueError(f"Invalid XCFramework slice in {package.name}")
+
+        signature = variant, frozenset(architectures)
+
+        if signature not in expected or signature in slices:
+            raise ValueError(
+                f"Unexpected XCFramework architectures in {package.name}"
+            )
+
+        identifiers.add(identifier)
+        slices.add(signature)
+        framework = f"{source}/{identifier}/{stem}.framework"
+        info = bundle_plist(
+            files,
+            f"{framework}/Info.plist",
+            package,
+        )
+
+        if info.get("CFBundleExecutable") != stem or not files.get(
+            f"{framework}/{stem}"
+        ):
+            raise ValueError(
+                f"Missing XCFramework binary in {package.name}: {framework}/{stem}"
+            )
+
+    return {name for name in files if name.startswith(f"{source}/")}
+
+
+def merge_packages(tag, packages, output):
+    """Verify every export target and atomically publish their combined addon."""
+
+    if not re.fullmatch(r"v\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)*", tag):
+        raise ValueError(f"Invalid release tag: {tag!r}")
+
+    version = tag[1:]
+    files, metadata, library_paths = {}, {}, {}
+    shared = descriptor = stem = None
+    binary_prefix = f"{ADDON_PATH}/bin/"
+
+    for target_name, target in RELEASE_TARGETS.items():
+        package = (
+            Path(packages) / f"[[[ addon_name ]]]-{version}-{target_name}.zip"
+        )
+
+        if not package.is_file():
+            raise ValueError(f"Missing release target package: {package.name}")
+
+        incoming, entries, configuration = read_package(package)
+        common = {
+            name: data
+            for name, data in incoming.items()
+            if not name.startswith(binary_prefix)
+        }
+
+        if shared is None:
+            shared = common
+            descriptor = configuration
+            stem = descriptor_stem(
+                configuration,
+                target,
+                package,
+            )
+            files.update(common)
+            metadata.update({name: entries[name] for name in common})
+        elif common != shared:
+            raise ValueError(f"Shared addon files differ in {package.name}")
+
+        binaries = set()
+
+        for key, relative in target.library_entries(stem).items():
+            if not configuration.has_option("libraries", key):
+                raise ValueError(
+                    f"Missing descriptor library entry in {package.name}: {key}"
+                )
+
+            value = configuration["libraries"][key]
+            source = f"{ADDON_PATH}/{relative}"
+
+            if value != f'"res://{source}"':
+                raise ValueError(
+                    f"Invalid descriptor library path in {package.name}: {value}"
+                )
+
+            if source.endswith(".xcframework"):
+                binaries.update(
+                    xcframework_files(
+                        incoming,
+                        source,
+                        stem,
+                        package,
+                    )
+                )
+            elif source not in incoming:
+                raise ValueError(
+                    f"Missing native binary in {package.name}: {source}"
+                )
+            else:
+                binaries.add(source)
+
+            destination = f"{binary_prefix}{target_name}/{source.removeprefix(binary_prefix)}"
+            library_paths[key] = f'"res://{destination}"'
+
+        native_files = {
+            name for name in incoming if name.startswith(binary_prefix)
+        }
+
+        if native_files != binaries:
+            raise ValueError(f"Unexpected native files in {package.name}")
+
+        for source in binaries:
+            destination = f"{binary_prefix}{target_name}/{source.removeprefix(binary_prefix)}"
+            files[destination] = incoming[source]
+            metadata[destination] = entries[source]
+
+    if set(descriptor["libraries"]) != set(library_paths):
+        raise ValueError("Descriptor contains unsupported library entries")
+
+    descriptor["libraries"].update(library_paths)
+    descriptor["configuration"]["reloadable"] = "false"
+    text = io.StringIO()
+    descriptor.write(text)
+    files[DESCRIPTOR_PATH] = text.getvalue().encode("utf-8")
+    output = Path(output)
+    output.mkdir(parents=True, exist_ok=True)
+    destination = output / f"[[[ addon_name ]]]-{version}.zip"
+    temporary = None
+
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=output,
+            prefix=".gdextension-stage-",
+            delete=False,
+        ) as staged:
+            temporary = Path(staged.name)
+
+        with zipfile.ZipFile(
+            temporary,
+            "w",
+            compression=zipfile.ZIP_DEFLATED,
+        ) as archive:
+            for name in sorted(files):
+                entry = metadata[name]
+                entry.filename = name
+                archive.writestr(
+                    entry,
+                    files[name],
+                    compress_type=zipfile.ZIP_DEFLATED,
+                )
+
+        os.replace(temporary, destination)
+    finally:
+        if temporary is not None and temporary.exists():
+            temporary.unlink()
+
+    return destination
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--tag", required=True)
+    parser.add_argument(
+        "--packages",
+        type=Path,
+        default=Path("dist/targets"),
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("dist"),
+    )
+    args = parser.parse_args()
+
+    try:
+        print(
+            merge_packages(
+                args.tag,
+                args.packages,
+                args.output,
+            )
+        )
+    except (
+        OSError,
+        ValueError,
+        KeyError,
+        configparser.Error,
+        zipfile.BadZipFile,
+    ) as error:
+        print(f"error: {error}", file=sys.stderr)
+
+        return 1
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

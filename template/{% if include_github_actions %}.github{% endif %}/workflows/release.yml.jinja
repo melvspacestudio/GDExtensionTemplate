@@ -1,0 +1,246 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to rebuild and upload (leave empty to run release-please)
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}-${{ inputs.tag || 'automatic' }}
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    if: github.ref == 'refs/heads/main' && inputs.tag == ''
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - name: Create release App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
+      - name: Open release PR or create release
+        id: release
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  package:
+    name: Package ${{ matrix.target }}
+    needs: release-please
+    if: >-
+      ${{ !cancelled() && github.ref == 'refs/heads/main' &&
+          (needs.release-please.outputs.release_created == 'true' ||
+           (github.event_name == 'workflow_dispatch' && inputs.tag != '')) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            platform: desktop
+            native: true
+          - runner: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+            platform: desktop
+            native: true
+          - runner: ubuntu-22.04
+            target: i686-unknown-linux-gnu
+            platform: desktop
+            cross-packages: gcc-i686-linux-gnu libc6-dev-i386-cross
+          - runner: ubuntu-22.04
+            target: armv7-unknown-linux-gnueabihf
+            platform: desktop
+            cross-packages: gcc-arm-linux-gnueabihf libc6-dev-armhf-cross
+          - runner: windows-2022
+            target: x86_64-pc-windows-msvc
+            platform: desktop
+            native: true
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            platform: desktop
+            native: true
+          - runner: windows-2022
+            target: i686-pc-windows-msvc
+            platform: desktop
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            platform: desktop
+            native: true
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            platform: desktop
+            native: true
+          - runner: ubuntu-22.04
+            target: aarch64-linux-android
+            platform: android
+          - runner: ubuntu-22.04
+            target: armv7-linux-androideabi
+            platform: android
+          - runner: ubuntu-22.04
+            target: x86_64-linux-android
+            platform: android
+          - runner: ubuntu-22.04
+            target: i686-linux-android
+            platform: android
+          - runner: macos-15
+            target: ios-universal
+            platform: ios
+            rust-targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+          - runner: ubuntu-22.04
+            target: wasm32-unknown-emscripten-threads
+            platform: web
+          - runner: ubuntu-22.04
+            target: wasm32-unknown-emscripten
+            platform: web
+    env:
+      RELEASE_TAG: ${{ inputs.tag || needs.release-please.outputs.tag_name }}
+      RELEASE_TARGET: ${{ matrix.target }}
+      EXPORT_PLATFORM: ${{ matrix.platform }}
+      VERIFY_NATIVE_HOST: ${{ matrix.native || false }}
+      CARGO_TARGET_I686_UNKNOWN_LINUX_GNU_LINKER: i686-linux-gnu-gcc
+      CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER: arm-linux-gnueabihf-gcc
+      ANDROID_NDK_VERSION: '29.0.14206865'
+      EMSDK_VERSION: '4.0.20'
+      NIGHTLY_TOOLCHAIN: nightly-2026-01-22
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          persist-credentials: false
+      - name: Set up Python
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          python-version: '3.13'
+          activate-environment: true
+          venv-path: ${{ runner.temp }}/gdextension-python
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d
+        if: matrix.platform != 'web'
+        with:
+          toolchain: '1.97.1'
+          targets: ${{ matrix.rust-targets || matrix.target }}
+      - name: Set up Rust for Web
+        if: matrix.platform == 'web'
+        uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d
+        with:
+          toolchain: ${{ env.NIGHTLY_TOOLCHAIN }}
+          targets: wasm32-unknown-emscripten
+          components: rust-src
+      - name: Set up Linux cross compilers
+        if: matrix.cross-packages != ''
+        env:
+          CROSS_PACKAGES: ${{ matrix.cross-packages }}
+        run: |
+          read -ra packages <<< "$CROSS_PACKAGES"
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends "${packages[@]}"
+      - name: Set up Android NDK
+        if: matrix.platform == 'android'
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;$ANDROID_NDK_VERSION"
+          test -x "$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64/bin/clang"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
+      - name: Set up Emscripten
+        if: matrix.platform == 'web'
+        run: |
+          git init "$RUNNER_TEMP/emsdk"
+          git -C "$RUNNER_TEMP/emsdk" fetch --depth=1 https://github.com/emscripten-core/emsdk.git e4fe26ef59168ff44f4c23c466e497bf60b3411e
+          git -C "$RUNNER_TEMP/emsdk" checkout --detach FETCH_HEAD
+          "$RUNNER_TEMP/emsdk/emsdk" install "$EMSDK_VERSION"
+          "$RUNNER_TEMP/emsdk/emsdk" activate "$EMSDK_VERSION"
+      - name: Verify release version and target
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY"
+          python - <<'PY'
+          import os
+          from scripts.native_build import native_host, rust_manifest
+
+          version = rust_manifest()["package"]["version"]
+          if os.environ["RELEASE_TAG"] != f"v{version}":
+              raise SystemExit("Release tag does not match the Cargo package version")
+          if (os.environ["VERIFY_NATIVE_HOST"] == "true"
+                  and native_host() != os.environ["RELEASE_TARGET"]):
+              raise SystemExit("Runner architecture does not match the release target")
+          PY
+      - name: Build optimized runtime library
+        run: |
+          if [[ "$EXPORT_PLATFORM" == web ]]; then
+            # shellcheck source=/dev/null
+            source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+          fi
+          python scripts/native_build.py build runtime --release --target "$RELEASE_TARGET"
+      - name: Build optimized editor library
+        if: matrix.platform == 'desktop'
+        run: python scripts/native_build.py build editor --release --target "$RELEASE_TARGET"
+      - name: Package addon
+        run: python scripts/native_build.py package --target "$RELEASE_TARGET"
+      - name: Stage release package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: addon-${{ matrix.target }}
+          path: dist/[[[ addon_name ]]]-*-${{ matrix.target }}.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  upload:
+    name: Upload release assets
+    needs: [release-please, package]
+    if: >-
+      ${{ !cancelled() && needs.package.result == 'success' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RELEASE_TAG: ${{ inputs.tag || needs.release-please.outputs.tag_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: addon-*
+          path: dist/targets
+          merge-multiple: true
+      - name: Combine all export targets into one addon
+        run: python3 scripts/package_release.py --tag "$RELEASE_TAG"
+      - name: Upload the complete addon
+        run: |
+          gh release upload "$RELEASE_TAG" "dist/[[[ addon_name ]]]-${RELEASE_TAG#v}.zip" --repo "$GITHUB_REPOSITORY" --clobber
+      - name: Remove obsolete architecture archives
+        run: |
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' |
+          while IFS= read -r asset; do
+            if [[ -f "dist/targets/$asset" ]]; then
+              gh release delete-asset "$RELEASE_TAG" "$asset" --repo "$GITHUB_REPOSITORY" --yes
+            fi
+          done

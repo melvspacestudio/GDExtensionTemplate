@@ -1,0 +1,16 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://demo/main.gd" id="1_demo"]
+
+[node name="Demo" type="Node"]
+script = ExtResource("1_demo")
+
+[node name="Extension" type="[[[ class_prefix ]]]Node" parent="."]
+
+[node name="Message" type="Label" parent="."]
+offset_left = 32.0
+offset_top = 32.0
+offset_right = 928.0
+offset_bottom = 128.0
+theme_override_font_sizes/font_size = 28
+text = "Loading extension..."

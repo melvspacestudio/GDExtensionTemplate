@@ -1,0 +1,30 @@
+use godot::classes::{INode, Node};
+use godot::prelude::*;
+
+/// A minimal native node available in both editor and runtime builds.
+#[derive(GodotClass)]
+#[class(base = Node)]
+pub struct [[[ class_prefix ]]]Node {
+    #[export]
+    message: GString,
+    base: Base<Node>,
+}
+
+#[godot_api]
+impl INode for [[[ class_prefix ]]]Node {
+    fn init(base: Base<Node>) -> Self {
+        Self {
+            message: "Hello from Rust!".into(),
+            base,
+        }
+    }
+}
+
+#[godot_api]
+impl [[[ class_prefix ]]]Node {
+    /// Returns the message configured in the Inspector or through GDScript.
+    #[func]
+    fn greet(&self) -> GString {
+        self.message.clone()
+    }
+}

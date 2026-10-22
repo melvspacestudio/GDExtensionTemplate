@@ -1,0 +1,69 @@
+_min_copier_version: "9.19.0"
+_subdirectory: template
+_envops:
+  variable_start_string: "[[["
+  variable_end_string: "]]]"
+  keep_trailing_newline: true
+_exclude:
+  - __pycache__
+  - "*.pyc"
+  - .DS_Store
+
+addon_name:
+  type: str
+  default: my_extension
+  help: Rust crate and addon directory name (lowercase snake_case).
+  validator: >-
+    {% if not (addon_name | regex_search('^[a-z][a-z0-9]*(?:_[a-z0-9]+)*\Z')) %}
+    Use lowercase ASCII letters, digits, and single underscores; start with a letter.
+    {% elif addon_name in ['as', 'async', 'await', 'break', 'const', 'continue', 'crate', 'dyn', 'else', 'enum', 'extern', 'false', 'fn', 'for', 'if', 'impl', 'in', 'let', 'loop', 'match', 'mod', 'move', 'mut', 'pub', 'ref', 'return', 'self', 'static', 'struct', 'super', 'trait', 'true', 'type', 'unsafe', 'use', 'where', 'while', 'abstract', 'become', 'box', 'do', 'final', 'gen', 'macro', 'override', 'priv', 'try', 'typeof', 'unsized', 'virtual', 'yield', 'glam', 'godot', 'heck', 'libc', 'litrs', 'markdown', 'nanoserde', 'quote', 'venial', 'std', 'core', 'alloc', 'test', 'con', 'prn', 'aux', 'nul'] or (addon_name | regex_search('^(?:com|lpt)[1-9]\Z')) %}
+    Choose a name that is not a Rust keyword, dependency, standard crate, or reserved device name.
+    {% endif %}
+
+project_name:
+  type: str
+  default: "[[[ addon_name | replace('_', ' ') | title ]]]"
+  help: Display name for the Godot sandbox and README.
+  validator: >-
+    {% if not project_name.strip() or (project_name | regex_search('[\x00-\x1f\x7f]')) %}
+    Enter a nonempty single-line display name without control characters.
+    {% endif %}
+
+project_description:
+  type: str
+  default: A Rust GDExtension for Godot.
+  help: Short project description.
+  validator: >-
+    {% if not project_description.strip() or (project_description | regex_search('[\x00-\x1f\x7f]')) %}
+    Enter a nonempty single-line description without control characters.
+    {% endif %}
+
+class_prefix:
+  type: str
+  default: "[[[ addon_name.split('_') | map('capitalize') | join ]]]"
+  help: PascalCase prefix for native classes (Node, EditorPlugin, Extension).
+  validator: >-
+    {% if not (class_prefix | regex_search('^[A-Z][a-zA-Z0-9]*\Z')) %}
+    Start with an uppercase ASCII letter and use only letters and digits.
+    {% elif class_prefix in ['Animation', 'AnimationRoot', 'GLTF', 'Graph', 'GridMap', 'Missing', 'VisualShader'] %}
+    This prefix generates a built-in Godot class name; choose a project-specific prefix.
+    {% endif %}
+
+ios_bundle_identifier_prefix:
+  type: str
+  default: org.example
+  help: Reverse-domain prefix for iOS frameworks; the addon name is appended.
+  validator: >-
+    {% if not (ios_bundle_identifier_prefix | regex_search('^[a-zA-Z][a-zA-Z0-9]*(?:[.-][a-zA-Z0-9]+)*\.[a-zA-Z][a-zA-Z0-9]*(?:-[a-zA-Z0-9]+)*\Z')) %}
+    Use a reverse-domain identifier such as org.example or com.my-studio.
+    {% endif %}
+
+include_github_actions:
+  type: bool
+  default: true
+  help: Include GitHub CI and release-please workflows?
+
+_message_after_copy: |
+  Created [[[ project_name ]]].
+  Run `just check`, then `just demo` in the generated project.
+  See its README.md for prerequisites and release setup.

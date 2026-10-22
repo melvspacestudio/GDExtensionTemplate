@@ -1,0 +1,95 @@
+[configuration]
+entry_symbol = "gdext_rust_init"
+compatibility_minimum = "4.7"
+reloadable = true
+
+[libraries]
+; Editor entries precede runtime fallbacks; both export modes share release builds.
+linux.editor.x86_64 = "res://addons/[[[ addon_name ]]]/bin/editor/lib[[[ addon_name ]]].so"
+linux.template.debug.x86_64 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/lib[[[ addon_name ]]].so"
+linux.template.release.x86_64 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/lib[[[ addon_name ]]].so"
+linux.debug.x86_64 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/lib[[[ addon_name ]]].so"
+linux.release.x86_64 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/lib[[[ addon_name ]]].so"
+
+linux.editor.arm64 = "res://addons/[[[ addon_name ]]]/bin/editor/lib[[[ addon_name ]]].so"
+linux.template.debug.arm64 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/lib[[[ addon_name ]]].so"
+linux.template.release.arm64 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/lib[[[ addon_name ]]].so"
+linux.debug.arm64 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/lib[[[ addon_name ]]].so"
+linux.release.arm64 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/lib[[[ addon_name ]]].so"
+
+linux.editor.x86_32 = "res://addons/[[[ addon_name ]]]/bin/editor/lib[[[ addon_name ]]].so"
+linux.template.debug.x86_32 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/lib[[[ addon_name ]]].so"
+linux.template.release.x86_32 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/lib[[[ addon_name ]]].so"
+linux.debug.x86_32 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/lib[[[ addon_name ]]].so"
+linux.release.x86_32 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/lib[[[ addon_name ]]].so"
+
+linux.editor.arm32 = "res://addons/[[[ addon_name ]]]/bin/editor/lib[[[ addon_name ]]].so"
+linux.template.debug.arm32 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/lib[[[ addon_name ]]].so"
+linux.template.release.arm32 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/lib[[[ addon_name ]]].so"
+linux.debug.arm32 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/lib[[[ addon_name ]]].so"
+linux.release.arm32 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/lib[[[ addon_name ]]].so"
+
+windows.editor.x86_64 = "res://addons/[[[ addon_name ]]]/bin/editor/[[[ addon_name ]]].dll"
+windows.template.debug.x86_64 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/[[[ addon_name ]]].dll"
+windows.template.release.x86_64 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/[[[ addon_name ]]].dll"
+windows.debug.x86_64 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/[[[ addon_name ]]].dll"
+windows.release.x86_64 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/[[[ addon_name ]]].dll"
+
+windows.editor.arm64 = "res://addons/[[[ addon_name ]]]/bin/editor/[[[ addon_name ]]].dll"
+windows.template.debug.arm64 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/[[[ addon_name ]]].dll"
+windows.template.release.arm64 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/[[[ addon_name ]]].dll"
+windows.debug.arm64 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/[[[ addon_name ]]].dll"
+windows.release.arm64 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/[[[ addon_name ]]].dll"
+
+windows.editor.x86_32 = "res://addons/[[[ addon_name ]]]/bin/editor/[[[ addon_name ]]].dll"
+windows.template.debug.x86_32 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/[[[ addon_name ]]].dll"
+windows.template.release.x86_32 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/[[[ addon_name ]]].dll"
+windows.debug.x86_32 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/[[[ addon_name ]]].dll"
+windows.release.x86_32 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/[[[ addon_name ]]].dll"
+
+macos.editor.x86_64 = "res://addons/[[[ addon_name ]]]/bin/editor/lib[[[ addon_name ]]].dylib"
+macos.template.debug.x86_64 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/lib[[[ addon_name ]]].dylib"
+macos.template.release.x86_64 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/lib[[[ addon_name ]]].dylib"
+macos.debug.x86_64 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/lib[[[ addon_name ]]].dylib"
+macos.release.x86_64 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/lib[[[ addon_name ]]].dylib"
+
+macos.editor.arm64 = "res://addons/[[[ addon_name ]]]/bin/editor/lib[[[ addon_name ]]].dylib"
+macos.template.debug.arm64 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/lib[[[ addon_name ]]].dylib"
+macos.template.release.arm64 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/lib[[[ addon_name ]]].dylib"
+macos.debug.arm64 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/lib[[[ addon_name ]]].dylib"
+macos.release.arm64 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/lib[[[ addon_name ]]].dylib"
+
+android.template.debug.arm64 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/lib[[[ addon_name ]]].so"
+android.template.release.arm64 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/lib[[[ addon_name ]]].so"
+android.debug.arm64 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/lib[[[ addon_name ]]].so"
+android.release.arm64 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/lib[[[ addon_name ]]].so"
+
+android.template.debug.arm32 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/lib[[[ addon_name ]]].so"
+android.template.release.arm32 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/lib[[[ addon_name ]]].so"
+android.debug.arm32 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/lib[[[ addon_name ]]].so"
+android.release.arm32 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/lib[[[ addon_name ]]].so"
+
+android.template.debug.x86_64 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/lib[[[ addon_name ]]].so"
+android.template.release.x86_64 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/lib[[[ addon_name ]]].so"
+android.debug.x86_64 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/lib[[[ addon_name ]]].so"
+android.release.x86_64 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/lib[[[ addon_name ]]].so"
+
+android.template.debug.x86_32 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/lib[[[ addon_name ]]].so"
+android.template.release.x86_32 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/lib[[[ addon_name ]]].so"
+android.debug.x86_32 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/lib[[[ addon_name ]]].so"
+android.release.x86_32 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/lib[[[ addon_name ]]].so"
+
+ios.template.debug = "res://addons/[[[ addon_name ]]]/bin/runtime/release/[[[ addon_name ]]].xcframework"
+ios.template.release = "res://addons/[[[ addon_name ]]]/bin/runtime/release/[[[ addon_name ]]].xcframework"
+ios.debug = "res://addons/[[[ addon_name ]]]/bin/runtime/release/[[[ addon_name ]]].xcframework"
+ios.release = "res://addons/[[[ addon_name ]]]/bin/runtime/release/[[[ addon_name ]]].xcframework"
+
+web.template.debug.threads.wasm32 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/[[[ addon_name ]]].threads.wasm"
+web.template.release.threads.wasm32 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/[[[ addon_name ]]].threads.wasm"
+web.debug.threads.wasm32 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/[[[ addon_name ]]].threads.wasm"
+web.release.threads.wasm32 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/[[[ addon_name ]]].threads.wasm"
+
+web.template.debug.wasm32 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/[[[ addon_name ]]].wasm"
+web.template.release.wasm32 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/[[[ addon_name ]]].wasm"
+web.debug.wasm32 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/[[[ addon_name ]]].wasm"
+web.release.wasm32 = "res://addons/[[[ addon_name ]]]/bin/runtime/release/[[[ addon_name ]]].wasm"

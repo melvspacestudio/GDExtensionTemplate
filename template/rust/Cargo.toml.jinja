@@ -1,0 +1,33 @@
+[package]
+name = "[[[ addon_name ]]]"
+version = "0.1.0"
+description = [[[ project_description | to_json(ensure_ascii=False) ]]]
+edition = "2024"
+rust-version = "1.94"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+editor = ["godot/register-docs"]
+web = ["godot/experimental-wasm", "godot/lazy-function-tables"]
+web-nothreads = ["web", "godot/experimental-wasm-nothreads"]
+
+[dependencies]
+godot = { version = "=0.5.5", features = ["api-4-7", "experimental-godot-api"] }
+
+# Web uses Compatibility rendering; gdext's thread-safe bindings cannot be
+# combined with its single-threaded Wasm support or lazy function tables.
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+godot = { version = "=0.5.5", features = ["experimental-threads"] }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+# gdext enables Linux library unloading through its debug-assertions setting.
+# Optimized editor builds use release with a per-build debug-assertions override.
+[profile.release]
+lto = "thin"
+codegen-units = 1

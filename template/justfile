@@ -1,0 +1,43 @@
+set windows-shell := ["cmd.exe", "/d", "/c"]
+
+python := if os() == "windows" { "python" } else { "python3" }
+
+_default:
+    @just --list
+
+alias build-runtime-debug := build-runtime
+
+build-runtime:
+    {{ python }} scripts/native_build.py build runtime --release
+
+build-editor-debug:
+    {{ python }} scripts/native_build.py build editor
+
+build-editor:
+    {{ python }} scripts/native_build.py build editor --release
+
+build-debug: build-runtime build-editor-debug
+
+# Install the optimized editor and shared runtime libraries before packaging.
+build: build-runtime build-editor
+
+sync-addon:
+    {{ python }} scripts/native_build.py sync-addon
+
+package: build
+    {{ python }} scripts/native_build.py package
+
+check:
+    {{ python }} scripts/check.py rust
+
+check-godot:
+    {{ python }} scripts/check.py godot
+
+demo: build-debug
+    {{ python }} scripts/native_build.py run
+
+check-all:
+    {{ python }} scripts/check.py all
+
+editor: build-debug
+    {{ python }} scripts/native_build.py open

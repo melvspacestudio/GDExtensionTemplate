@@ -1,0 +1,103 @@
+# [[[ project_name ]]]
+
+[[[ project_description ]]]
+
+## Develop
+
+Requirements: rustup, Python 3.11+, just, Godot 4.7+, and a native compiler/linker.
+Rust is pinned to 1.97.1 and godot-rust to 0.5.5. Set `GODOT` to your engine
+executable if `godot` is not on PATH. Windows recipes use `python`; other hosts
+use `python3`.
+
+```sh
+just demo          # Build release runtime + debug editor and run the sandbox
+just editor        # Build and open the sandbox in Godot
+just check         # rustfmt and Clippy for runtime and editor configurations
+just check-godot   # Build both libraries and import the sandbox headlessly
+just check-all     # All of the above checks
+just build         # Build optimized runtime and editor libraries
+just package       # Build and package the current host's addon in dist/
+```
+
+`[[[ class_prefix ]]]Node` is available in both runtime and editor builds. It
+exports `message` in the Inspector and exposes `greet()` to GDScript. Extend
+`rust/src/runtime/` with your native functionality. The `editor` Cargo feature
+adds `[[[ class_prefix ]]]EditorPlugin` and class documentation; extend
+`rust/src/editor/` with editor tools. The native editor plugin is registered
+automatically and does not need a GDScript `plugin.cfg`.
+
+The demo lives in `godot/demo/`; the sandbox uses Compatibility rendering so the
+minimal example does not require Vulkan. The import check catches engine errors
+and verifies that the editor library loads. No test suites are included.
+
+Build helpers atomically publish libraries into `addon/bin/` and copy the addon
+into ignored `godot/addons/[[[ addon_name ]]]/`. Edit `addon/`, not that generated
+copy. Run one build/publish operation at a time. Close Godot and retry if Windows
+locks a loaded DLL.
+
+Both Godot debug and release exports use the optimized runtime library. Editor
+libraries are selected separately; optimized editor builds retain debug assertions
+for gdext's Linux hot-reload support. Packaged descriptors disable hot reload.
+
+## Install and package
+
+After `just build`, copy `addon/` to `addons/[[[ addon_name ]]]/` in your Godot
+project. Add a `[[[ class_prefix ]]]Node` to a scene and call `greet()`.
+Alternatively, extract `dist/[[[ addon_name ]]]-<version>-<target>.zip` into the
+project. `rust/Cargo.toml` supplies the addon version; the descriptor's
+`compatibility_minimum` specifies the minimum Godot version.
+
+Build/package helpers accept `--target <target>`; IDs are listed in
+`scripts/release_targets.py`. Desktop targets need runtime and editor libraries;
+Android, iOS, and Web need runtime only. For example:
+
+```sh
+python3 scripts/native_build.py build runtime --release --target aarch64-linux-android
+python3 scripts/native_build.py package --target aarch64-linux-android
+```
+
+Install the Rust target and any cross compiler before building. Android needs
+`ANDROID_NDK_HOME` (the release workflow pins NDK 29.0.14206865). iOS needs macOS,
+Xcode, and the `aarch64-apple-ios`, `aarch64-apple-ios-sim`, and
+`x86_64-apple-ios` Rust targets. Its `ios-universal` package contains device and
+simulator XCFramework slices with bundle identifier prefix
+`[[[ ios_bundle_identifier_prefix ]]]`; sign frameworks with the exported app and
+use an iOS deployment target of at least 16.0.
+
+Web needs Emscripten 4.0.20 and Rust `nightly-2026-01-22` with `rust-src` and the
+`wasm32-unknown-emscripten` target. Web support is experimental; enable Extensions
+Support in Godot's export preset. Threaded exports require cross-origin isolation
+headers. Keep Rust, bindings, engine API, descriptor minimum, and CI engine pins
+aligned when upgrading.
+
+Local library paths are shared across architectures: package each target before
+building another, then rebuild the native host before reopening the sandbox.
+The release merger puts each target in its own directory in the combined archive.
+Validate platform exports on their intended devices.
+{% if include_github_actions %}
+
+## GitHub releases
+
+CI runs formatting, lint, headless import, and packaging on hosted Linux, Windows,
+and macOS runners. The Release workflow runs release-please on `main`. Conventional
+`feat:` and `fix:` commits create a release PR; the first release is `v0.1.0`.
+Merging it builds all 16 release targets and uploads one
+`[[[ addon_name ]]]-<version>.zip`. The changelog is created by release-please.
+
+Install a GitHub App on the repository with read/write permissions for contents,
+issues, and pull requests. Configure Actions secrets `RELEASE_APP_CLIENT_ID`
+and `RELEASE_APP_PRIVATE_KEY` with its client ID and PEM private key. App tokens
+allow checks to run on release PRs; packaging/upload uses `GITHUB_TOKEN` with
+job-specific permissions.
+
+To rebuild an existing release, dispatch the Release workflow from `main` with
+`tag` set to its tag (for example `v0.1.0`). The existing combined asset is replaced
+after all target packages pass validation. Release-please's changelog-only `go`
+strategy updates the Rust manifest and lockfile through explicit TOML entries.
+{% endif %}
+
+## Template updates
+
+Keep `.copier-answers.yml` committed. If this project was generated from a
+Git-versioned template, run `copier update` from a clean project Git checkout to
+merge newer template changes. Review the diff and rerun `just check-all` afterward.

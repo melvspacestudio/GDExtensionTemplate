@@ -1,0 +1,12 @@
+use godot::prelude::*;
+
+mod runtime;
+
+#[cfg(feature = "editor")]
+mod editor;
+
+struct [[[ class_prefix ]]]Extension;
+
+// SAFETY: registration is handled by gdext; no custom FFI state is introduced.
+#[gdextension(entry_symbol = gdext_rust_init)]
+unsafe impl ExtensionLibrary for [[[ class_prefix ]]]Extension {}

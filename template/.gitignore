@@ -1,0 +1,8 @@
+/rust/target/
+/addon/bin/
+/godot/.godot/
+/godot/addons/
+/dist/
+__pycache__/
+*.pyc
+.DS_Store
