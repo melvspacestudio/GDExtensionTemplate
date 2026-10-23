@@ -78,46 +78,48 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             platform: desktop
             cross-tool: zigbuild
-          - target: i686-unknown-linux-gnu
-            platform: desktop
-            cross-tool: zigbuild
-          - target: armv7-unknown-linux-gnueabihf
-            platform: desktop
-            cross-tool: zigbuild
           - target: x86_64-pc-windows-msvc
-            platform: desktop
-            cross-tool: xwin
-          - target: aarch64-pc-windows-msvc
-            platform: desktop
-            cross-tool: xwin
-          - target: i686-pc-windows-msvc
             platform: desktop
             cross-tool: xwin
           - target: x86_64-apple-darwin
             platform: desktop
           - target: aarch64-apple-darwin
             platform: desktop
-          - target: aarch64-linux-android
-            platform: android
-          - target: armv7-linux-androideabi
-            platform: android
-          - target: x86_64-linux-android
-            platform: android
-          - target: i686-linux-android
-            platform: android
-          # iOS paused; restore Rust targets and remove --exclude-target to re-enable.
+          # Temporarily paused; remove matching --exclude-target flags to re-enable.
+          # - target: i686-unknown-linux-gnu
+          #   platform: desktop
+          #   cross-tool: zigbuild
+          # - target: armv7-unknown-linux-gnueabihf
+          #   platform: desktop
+          #   cross-tool: zigbuild
+          # - target: aarch64-pc-windows-msvc
+          #   platform: desktop
+          #   cross-tool: xwin
+          # - target: i686-pc-windows-msvc
+          #   platform: desktop
+          #   cross-tool: xwin
+          # - target: aarch64-linux-android
+          #   platform: android
+          # - target: armv7-linux-androideabi
+          #   platform: android
+          # - target: x86_64-linux-android
+          #   platform: android
+          # - target: i686-linux-android
+          #   platform: android
+          # iOS also needs the Rust targets expression below restored.
           # - target: ios-universal
           #   platform: ios
           #   rust-targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
-          - target: wasm32-unknown-emscripten-threads
-            platform: web
-          - target: wasm32-unknown-emscripten
-            platform: web
+          # - target: wasm32-unknown-emscripten-threads
+          #   platform: web
+          # - target: wasm32-unknown-emscripten
+          #   platform: web
     env:
       RELEASE_TAG: ${{ inputs.tag || needs.release-please.outputs.tag_name }}
       RELEASE_TARGET: ${{ matrix.target }}
       EXPORT_PLATFORM: ${{ matrix.platform }}
-      XWIN_ARCH: x86,x86_64,aarch64
+      # Restore x86/aarch64 here when their Windows targets are re-enabled.
+      XWIN_ARCH: x86_64
       ANDROID_NDK_VERSION: '29.0.14206865'
       EMSDK_VERSION: '4.0.20'
       NIGHTLY_TOOLCHAIN: nightly-2026-01-22
@@ -237,7 +239,17 @@ jobs:
       - name: Combine all export targets into one addon
         run: >-
           python scripts/package_release.py --tag "$RELEASE_TAG"
+          --exclude-target i686-unknown-linux-gnu
+          --exclude-target armv7-unknown-linux-gnueabihf
+          --exclude-target aarch64-pc-windows-msvc
+          --exclude-target i686-pc-windows-msvc
+          --exclude-target aarch64-linux-android
+          --exclude-target armv7-linux-androideabi
+          --exclude-target x86_64-linux-android
+          --exclude-target i686-linux-android
           --exclude-target ios-universal
+          --exclude-target wasm32-unknown-emscripten-threads
+          --exclude-target wasm32-unknown-emscripten
       - name: Upload the complete addon
         run: |
           gh release upload "$RELEASE_TAG" "dist/[[[ addon_name ]]]-${RELEASE_TAG#v}.zip" --repo "$GITHUB_REPOSITORY" --clobber

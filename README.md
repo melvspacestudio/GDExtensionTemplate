@@ -45,7 +45,9 @@ configuration. Generated projects start at version `0.1.0`.
 - `justfile`: `check`, `build-debug`, `build`, `demo`, `editor`, `check-godot`,
   `check-all`, and `package` commands.
 - Optional CI and release-please automation on `[self-hosted, macos]` runners,
-  cross-compiling the 16 desktop, Android, iOS, and Web release targets.
+  building Linux x86_64/ARM64, Windows x86_64, and macOS x86_64/ARM64 releases.
+  Other architectures, Android, iOS, and Web are temporarily paused in releases;
+  their build support is retained.
 
 Prerequisites for generated projects: rustup, Python 3.11+, just, a native
 compiler/linker, and Godot 4.7+. The inherited pins are Rust 1.97.1,

@@ -84,9 +84,10 @@ available. There is no GitHub-hosted runner fallback. CI runs formatting, lint,
 headless import, and native packaging on that Mac.
 
 Prepare the runner account with Git, rustup, Homebrew, GitHub CLI (`gh`), and full
-Xcode with its command-line tools selected and iOS SDKs installed. Install LLVM
+Xcode with its command-line tools selected. Install LLVM
 with `brew install llvm`; the Windows build step adds its binaries to PATH.
-For Android, install Java and Android SDK command-line tools, set `ANDROID_HOME`,
+If re-enabling iOS, install its Xcode SDKs. If re-enabling Android, install Java
+and Android SDK command-line tools, set `ANDROID_HOME`,
 and accept the SDK licenses under the runner account. The workflow expects
 `$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager` and installs the pinned NDK.
 On Apple Silicon, install Rosetta for the NDK's Intel host tools. Make these tools
@@ -94,14 +95,17 @@ and environment variables available to the runner service, not just your shell.
 
 Workflows install Python, Rust toolchains, just, and Godot as needed. Releases
 use `cargo-zigbuild` with Zig for Linux and `cargo-xwin` with LLVM for Windows
-MSVC, including x86, x64, and ARM64. Windows SDK/CRT files are downloaded by
-`cargo-xwin`. Both macOS architectures and the iOS bundle use Xcode; Android uses
-the macOS NDK, and Web uses Emscripten. Linux and Windows artifacts are
+MSVC x86_64. Windows SDK/CRT files are downloaded by `cargo-xwin`. Both macOS
+architectures use Xcode. Linux and Windows artifacts are
 cross-compiled; CI's Godot import check runs only on macOS.
 
 The Release workflow runs release-please on `main`. Conventional
 `feat:` and `fix:` commits create a release PR; the first release is `v0.1.0`.
-Merging it builds all 16 release targets and uploads one
+Merging it builds five release targets: Linux x86_64/ARM64, Windows x86_64,
+and macOS x86_64/ARM64. Other architectures, Android, iOS, and Web are temporarily
+paused; their build support is retained. To re-enable a target, uncomment its
+release matrix entry and remove its matching `--exclude-target` flag from the
+merge step, following the toolchain comments in the workflow. The workflow uploads one
 `[[[ addon_name ]]]-<version>.zip`. The changelog is created by release-please.
 
 Install a GitHub App on the repository with read/write permissions for contents,
