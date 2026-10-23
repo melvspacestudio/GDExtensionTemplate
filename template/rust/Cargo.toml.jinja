@@ -7,6 +7,8 @@ rust-version = "1.94"
 publish = false
 
 [lib]
+# Keep the library name equal to the package name used by the addon descriptor.
+# If you add `name` here, also update the descriptor's binary paths.
 crate-type = ["cdylib", "rlib"]
 
 [features]
@@ -16,7 +18,7 @@ web = ["godot/experimental-wasm", "godot/lazy-function-tables"]
 web-nothreads = ["web", "godot/experimental-wasm-nothreads"]
 
 [dependencies]
-godot = { version = "=0.5.5", features = ["api-4-7", "experimental-godot-api"] }
+godot = { version = "=0.5.5", features = ["api-4-7"] }
 
 # Web uses Compatibility rendering; gdext's thread-safe bindings cannot be
 # combined with its single-threaded Wasm support or lazy function tables.

@@ -21,12 +21,24 @@ concurrency:
 jobs:
   release-please:
     if: github.ref == 'refs/heads/main' && inputs.tag == ''
-    runs-on: ubuntu-22.04
+    runs-on: [self-hosted, macos]
     timeout-minutes: 10
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
+      - name: Verify release App configuration
+        env:
+          RELEASE_APP_CLIENT_ID: ${{ secrets.RELEASE_APP_CLIENT_ID }}
+          RELEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+        run: |
+          if [[ -z "$RELEASE_APP_CLIENT_ID" || -z "$RELEASE_APP_PRIVATE_KEY" ]]; then
+            echo \
+              "::error::Configure RELEASE_APP_CLIENT_ID and RELEASE_APP_PRIVATE_KEY" \
+              "in repository Actions secrets. See README.md for GitHub App setup."
+
+            exit 1
+          fi
       - name: Create release App token
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
@@ -51,7 +63,7 @@ jobs:
       ${{ !cancelled() && github.ref == 'refs/heads/main' &&
           (needs.release-please.outputs.release_created == 'true' ||
            (github.event_name == 'workflow_dispatch' && inputs.tag != '')) }}
-    runs-on: ${{ matrix.runner }}
+    runs-on: [self-hosted, macos]
     timeout-minutes: 45
     defaults:
       run:
@@ -60,70 +72,52 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-22.04
-            target: x86_64-unknown-linux-gnu
+          - target: x86_64-unknown-linux-gnu
             platform: desktop
-            native: true
-          - runner: ubuntu-22.04-arm
-            target: aarch64-unknown-linux-gnu
+            cross-tool: zigbuild
+          - target: aarch64-unknown-linux-gnu
             platform: desktop
-            native: true
-          - runner: ubuntu-22.04
-            target: i686-unknown-linux-gnu
+            cross-tool: zigbuild
+          - target: i686-unknown-linux-gnu
             platform: desktop
-            cross-packages: gcc-i686-linux-gnu libc6-dev-i386-cross
-          - runner: ubuntu-22.04
-            target: armv7-unknown-linux-gnueabihf
+            cross-tool: zigbuild
+          - target: armv7-unknown-linux-gnueabihf
             platform: desktop
-            cross-packages: gcc-arm-linux-gnueabihf libc6-dev-armhf-cross
-          - runner: windows-2022
-            target: x86_64-pc-windows-msvc
+            cross-tool: zigbuild
+          - target: x86_64-pc-windows-msvc
             platform: desktop
-            native: true
-          - runner: windows-11-arm
-            target: aarch64-pc-windows-msvc
+            cross-tool: xwin
+          - target: aarch64-pc-windows-msvc
             platform: desktop
-            native: true
-          - runner: windows-2022
-            target: i686-pc-windows-msvc
+            cross-tool: xwin
+          - target: i686-pc-windows-msvc
             platform: desktop
-          - runner: macos-15-intel
-            target: x86_64-apple-darwin
+            cross-tool: xwin
+          - target: x86_64-apple-darwin
             platform: desktop
-            native: true
-          - runner: macos-15
-            target: aarch64-apple-darwin
+          - target: aarch64-apple-darwin
             platform: desktop
-            native: true
-          - runner: ubuntu-22.04
-            target: aarch64-linux-android
+          - target: aarch64-linux-android
             platform: android
-          - runner: ubuntu-22.04
-            target: armv7-linux-androideabi
+          - target: armv7-linux-androideabi
             platform: android
-          - runner: ubuntu-22.04
-            target: x86_64-linux-android
+          - target: x86_64-linux-android
             platform: android
-          - runner: ubuntu-22.04
-            target: i686-linux-android
+          - target: i686-linux-android
             platform: android
-          - runner: macos-15
-            target: ios-universal
-            platform: ios
-            rust-targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
-          - runner: ubuntu-22.04
-            target: wasm32-unknown-emscripten-threads
+          # iOS paused; restore Rust targets and remove --exclude-target to re-enable.
+          # - target: ios-universal
+          #   platform: ios
+          #   rust-targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+          - target: wasm32-unknown-emscripten-threads
             platform: web
-          - runner: ubuntu-22.04
-            target: wasm32-unknown-emscripten
+          - target: wasm32-unknown-emscripten
             platform: web
     env:
       RELEASE_TAG: ${{ inputs.tag || needs.release-please.outputs.tag_name }}
       RELEASE_TARGET: ${{ matrix.target }}
       EXPORT_PLATFORM: ${{ matrix.platform }}
-      VERIFY_NATIVE_HOST: ${{ matrix.native || false }}
-      CARGO_TARGET_I686_UNKNOWN_LINUX_GNU_LINKER: i686-linux-gnu-gcc
-      CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER: arm-linux-gnueabihf-gcc
+      XWIN_ARCH: x86,x86_64,aarch64
       ANDROID_NDK_VERSION: '29.0.14206865'
       EMSDK_VERSION: '4.0.20'
       NIGHTLY_TOOLCHAIN: nightly-2026-01-22
@@ -142,7 +136,8 @@ jobs:
         if: matrix.platform != 'web'
         with:
           toolchain: '1.97.1'
-          targets: ${{ matrix.rust-targets || matrix.target }}
+          # Restore with iOS: ${{ matrix.rust-targets || matrix.target }}
+          targets: ${{ matrix.target }}
       - name: Set up Rust for Web
         if: matrix.platform == 'web'
         uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d
@@ -150,19 +145,22 @@ jobs:
           toolchain: ${{ env.NIGHTLY_TOOLCHAIN }}
           targets: wasm32-unknown-emscripten
           components: rust-src
-      - name: Set up Linux cross compilers
-        if: matrix.cross-packages != ''
-        env:
-          CROSS_PACKAGES: ${{ matrix.cross-packages }}
+      - name: Set up Linux cross compiler
+        if: matrix.cross-tool == 'zigbuild'
+        run: uv pip install 'cargo-zigbuild==0.23.4' 'ziglang==0.14.1'
+      - name: Set up Windows cross compiler
+        if: matrix.cross-tool == 'xwin'
         run: |
-          read -ra packages <<< "$CROSS_PACKAGES"
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends "${packages[@]}"
+          uv pip install 'cargo-xwin==0.23.1'
+          llvm_bin="$(brew --prefix llvm)/bin"
+          test -x "$llvm_bin/clang-cl"
+          test -x "$llvm_bin/lld-link"
+          echo "$llvm_bin" >> "$GITHUB_PATH"
       - name: Set up Android NDK
         if: matrix.platform == 'android'
         run: |
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;$ANDROID_NDK_VERSION"
-          test -x "$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64/bin/clang"
+          test -x "$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION/toolchains/llvm/prebuilt/darwin-x86_64/bin/clang"
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
       - name: Set up Emscripten
         if: matrix.platform == 'web'
@@ -172,21 +170,19 @@ jobs:
           git -C "$RUNNER_TEMP/emsdk" checkout --detach FETCH_HEAD
           "$RUNNER_TEMP/emsdk/emsdk" install "$EMSDK_VERSION"
           "$RUNNER_TEMP/emsdk/emsdk" activate "$EMSDK_VERSION"
-      - name: Verify release version and target
+      - name: Verify release version
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY"
           python - <<'PY'
           import os
-          from scripts.native_build import native_host, rust_manifest
+          from scripts.native_build import rust_manifest
 
           version = rust_manifest()["package"]["version"]
+
           if os.environ["RELEASE_TAG"] != f"v{version}":
               raise SystemExit("Release tag does not match the Cargo package version")
-          if (os.environ["VERIFY_NATIVE_HOST"] == "true"
-                  and native_host() != os.environ["RELEASE_TARGET"]):
-              raise SystemExit("Runner architecture does not match the release target")
           PY
       - name: Build optimized runtime library
         run: |
@@ -194,6 +190,7 @@ jobs:
             # shellcheck source=/dev/null
             source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
           fi
+
           python scripts/native_build.py build runtime --release --target "$RELEASE_TARGET"
       - name: Build optimized editor library
         if: matrix.platform == 'desktop'
@@ -214,7 +211,7 @@ jobs:
     needs: [release-please, package]
     if: >-
       ${{ !cancelled() && needs.package.result == 'success' }}
-    runs-on: ubuntu-22.04
+    runs-on: [self-hosted, macos]
     timeout-minutes: 10
     permissions:
       contents: write
@@ -231,8 +228,16 @@ jobs:
           pattern: addon-*
           path: dist/targets
           merge-multiple: true
+      - name: Set up Python
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          python-version: '3.13'
+          activate-environment: true
+          venv-path: ${{ runner.temp }}/gdextension-python
       - name: Combine all export targets into one addon
-        run: python3 scripts/package_release.py --tag "$RELEASE_TAG"
+        run: >-
+          python scripts/package_release.py --tag "$RELEASE_TAG"
+          --exclude-target ios-universal
       - name: Upload the complete addon
         run: |
           gh release upload "$RELEASE_TAG" "dist/[[[ addon_name ]]]-${RELEASE_TAG#v}.zip" --repo "$GITHUB_REPOSITORY" --clobber

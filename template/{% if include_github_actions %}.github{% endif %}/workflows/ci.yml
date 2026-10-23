@@ -15,13 +15,9 @@ concurrency:
 
 jobs:
   validate:
-    name: Validate (${{ matrix.runner }})
-    runs-on: ${{ matrix.runner }}
+    name: Validate (macOS)
+    runs-on: [self-hosted, macos]
     timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        runner: [ubuntu-22.04, windows-2022, macos-15]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:

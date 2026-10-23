@@ -178,8 +178,8 @@ def xcframework_files(files, source, stem, package):
     return {name for name in files if name.startswith(f"{source}/")}
 
 
-def merge_packages(tag, packages, output):
-    """Verify every export target and atomically publish their combined addon."""
+def merge_packages(tag, packages, output, exclude_targets=()):
+    """Verify enabled export targets and atomically publish their combined addon."""
 
     if not re.fullmatch(r"v\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)*", tag):
         raise ValueError(f"Invalid release tag: {tag!r}")
@@ -190,6 +190,9 @@ def merge_packages(tag, packages, output):
     binary_prefix = f"{ADDON_PATH}/bin/"
 
     for target_name, target in RELEASE_TARGETS.items():
+        if target_name in exclude_targets:
+            continue
+
         package = (
             Path(packages) / f"[[[ addon_name ]]]-{version}-{target_name}.zip"
         )
@@ -264,6 +267,13 @@ def merge_packages(tag, packages, output):
             files[destination] = incoming[source]
             metadata[destination] = entries[source]
 
+    if descriptor is None:
+        raise ValueError("At least one release target must be enabled")
+
+    for target_name in exclude_targets:
+        for key in RELEASE_TARGETS[target_name].library_entries(stem):
+            descriptor.remove_option("libraries", key)
+
     if set(descriptor["libraries"]) != set(library_paths):
         raise ValueError("Descriptor contains unsupported library entries")
 
@@ -311,6 +321,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tag", required=True)
     parser.add_argument(
+        "--exclude-target",
+        action="append",
+        choices=RELEASE_TARGETS,
+        default=[],
+        help="Omit a temporarily disabled target and its descriptor entries",
+    )
+    parser.add_argument(
         "--packages",
         type=Path,
         default=Path("dist/targets"),
@@ -328,6 +345,7 @@ def main():
                 args.tag,
                 args.packages,
                 args.output,
+                args.exclude_target,
             )
         )
     except (

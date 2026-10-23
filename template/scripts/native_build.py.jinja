@@ -209,9 +209,17 @@ def cargo_build(
     if toolchain:
         command.append(f"+{toolchain}")
 
+    if sys.platform == "darwin" and target.endswith(
+        ("-unknown-linux-gnu", "-unknown-linux-gnueabihf")
+    ):
+        command.append("zigbuild")
+    elif sys.platform == "darwin" and target.endswith("-pc-windows-msvc"):
+        command.extend(["xwin", "build"])
+    else:
+        command.append("build")
+
     command.extend(
         [
-            "build",
             "--locked",
             "--manifest-path",
             str(manifest),
@@ -367,11 +375,9 @@ def build_ios():
         )
         for target in IOS_TARGETS
     ]
-    temporary_root = Path(tempfile.gettempdir()) / "codex"
-    temporary_root.mkdir(parents=True, exist_ok=True)
     destination = ROOT / "addon/bin/runtime/release" / f"{stem}.xcframework"
 
-    with tempfile.TemporaryDirectory(dir=temporary_root) as work:
+    with tempfile.TemporaryDirectory(prefix="gdextension-ios-") as work:
         work = Path(work)
         frameworks = []
         version = (
@@ -402,10 +408,13 @@ def build_ios():
                     check=True,
                 )
 
-            architectures = subprocess.check_output(
-                ["lipo", "-archs", str(binary)],
-                text=True,
-            ).split()
+            architectures = (
+                subprocess.check_output(
+                    ["lipo", "-archs", str(binary)],
+                    text=True,
+                )
+                .split()
+            )
             expected = {"arm64"} if len(libraries) == 1 else {"arm64", "x86_64"}
 
             if set(architectures) != expected:

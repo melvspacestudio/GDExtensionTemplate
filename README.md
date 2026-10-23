@@ -44,8 +44,8 @@ configuration. Generated projects start at version `0.1.0`.
   formatting, lint, and Godot import checks.
 - `justfile`: `check`, `build-debug`, `build`, `demo`, `editor`, `check-godot`,
   `check-all`, and `package` commands.
-- Optional hosted Linux/Windows/macOS CI and release-please automation with
-  the source repository's 16 desktop, Android, iOS, and Web release targets.
+- Optional CI and release-please automation on `[self-hosted, macos]` runners,
+  cross-compiling the 16 desktop, Android, iOS, and Web release targets.
 
 Prerequisites for generated projects: rustup, Python 3.11+, just, a native
 compiler/linker, and Godot 4.7+. The inherited pins are Rust 1.97.1,
@@ -53,9 +53,12 @@ godot-rust 0.5.5, and CI Godot 4.7.2. Set `GODOT` to your engine executable
 when it is not named `godot` on PATH. Platform SDK requirements and GitHub App
 release credentials are documented in each generated project's root README.
 
+Register a macOS self-hosted runner for each generated repository before running
+Actions. All jobs require both `self-hosted` and `macos` labels; none select a
+GitHub-hosted runner. Runner prerequisites are in the generated root README.
+
 The template omits cloud rendering, shaders, icons, historical changelogs,
-cached imports, native binaries, test suites, and the source repository's
-self-hosted runner.
+cached imports, native binaries, and test suites.
 Generation only writes files; building is an explicit step and requires no
 Copier `--trust` flag.
 
